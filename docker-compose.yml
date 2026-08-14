@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # ChromaDB Vector Database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: ai-trip-agent-chroma
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - ai-trip-agent-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ai-trip-agent-api
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - ./chroma_data:/app/_chroma
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+    env_file:
+      - .env
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    networks:
+      - ai-trip-agent-network
+    restart: unless-stopped
+    command: uvicorn services.api.main:app --host 0.0.0.0 --port 8001 --reload
+
+  # Streamlit UI
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: ai-trip-agent-ui
+    ports:
+      - "8516:8516"
+    volumes:
+      - ./ui:/app/ui
+    environment:
+      - API_BASE_URL=http://api:8001
+    depends_on:
+      - api
+    networks:
+      - ai-trip-agent-network
+    restart: unless-stopped
+    command: streamlit run ui/streamlit_app.py --server.port 8516 --server.address 0.0.0.0
+
+networks:
+  ai-trip-agent-network:
+    driver: bridge
+
+volumes:
+  chroma_data:
+    driver: local
